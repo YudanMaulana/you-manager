@@ -1,17 +1,21 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:you_manager/utils/functions.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  const HomeScreen({Key? key}) : super(key: key);
 
   @override
-  _HomeScreenState createState() => _HomeScreenState();
+  State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  late Directory _currentDir;
-  List<FileSystemEntity> _files = [];
+  late Directory _nonRootDir;
+  late Directory _rootDir;
+  List<FileSystemEntity> _nonRootFiles = [];
+  List<FileSystemEntity> _rootFiles = [];
+  bool _hasRootAccess = false;
+  String _activePanel = 'nonRoot'; // Default panel aktif adalah non-root
 
   @override
   void initState() {
@@ -20,104 +24,181 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _initializeApp() async {
-    final hasPermission = await requestStoragePermission();
-    if (hasPermission) {
-      await _initDirectory();
+    _nonRootDir = Directory('/storage/emulated/0');
+    _rootDir = Directory('/');
+    _nonRootFiles = await initDirectory(_nonRootDir, context);
+    _hasRootAccess = await requestRootAccess(context);
+    if (_hasRootAccess) {
+      _rootFiles = await initDirectory(_rootDir, context);
     }
+    setState(() {});
   }
 
-  Future<bool> requestStoragePermission() async {
-    final status = await Permission.manageExternalStorage.request();
-    if (status.isGranted) {
-      return true;
-    } else {
-      // ignore: use_build_context_synchronously
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Permission denied. Please enable storage permission."),
-        ),
-      );
-      return false;
-    }
-  }
-
-  Future<void> _initDirectory() async {
-    try {
-      final Directory dir = Directory('/storage/emulated/0');
-      setState(() {
-        _currentDir = dir;
-        _files = dir.listSync();
-      });
-      debugPrint("Directory: ${dir.path}");
-    } catch (e) {
-      debugPrint("Error: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Error accessing directory: $e")),
-      );
-    }
-  }
-
-  void _navigateToDir(Directory dir) {
+  void _updateNonRootFiles(Directory dir) async {
+    _nonRootFiles = await initDirectory(dir, context);
     setState(() {
-      _currentDir = dir;
-      _files = dir.listSync();
+      _nonRootDir = dir;
     });
   }
 
-  Future<bool> _onWillPop() async {
-    if (_currentDir.parent.path != _currentDir.path) {
-      _navigateToDir(_currentDir.parent);
-      return false; // Jangan keluar aplikasi
-    } else {
-      return true; // Keluar aplikasi jika sudah di root
-    }
-  }
-
-  Widget _buildFileTile(FileSystemEntity entity) {
-    final isDir = entity is Directory;
-    return ListTile(
-      leading: Icon(
-        isDir ? Icons.folder : Icons.insert_drive_file,
-        color: Colors.white,
-      ),
-      title: Text(
-        entity.path.split('/').last,
-        style: TextStyle(color: Colors.white),
-      ),
-      onTap: () {
-        if (isDir) {
-          _navigateToDir(entity);
-        }
-      },
-    );
+  void _updateRootFiles(Directory dir) async {
+    _rootFiles = await initDirectory(dir, context);
+    setState(() {
+      _rootDir = dir;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     // ignore: deprecated_member_use
     return WillPopScope(
-      onWillPop: _onWillPop,
+      onWillPop: () async {
+        if (_activePanel == 'nonRoot') {
+          // Navigasi untuk panel non-root
+          if (_nonRootDir.path != '/storage/emulated/0') {
+            _updateNonRootFiles(_nonRootDir.parent);
+            return false;
+          }
+        } else if (_activePanel == 'root') {
+          // Navigasi untuk panel root
+          if (_rootDir.path != '/') {
+            _updateRootFiles(_rootDir.parent);
+            return false;
+          }
+        }
+        return true; // Keluar aplikasi jika tidak ada navigasi lebih lanjut
+      },
       child: Scaffold(
         appBar: AppBar(
-          scrolledUnderElevation: 1,
+          scrolledUnderElevation: 0,
           title: Text('You Manager', style: TextStyle(color: Colors.white)),
           backgroundColor: Colors.grey[900],
         ),
-        body: Container(
-          color: Colors.grey[900],
-          child: _files.isEmpty
-              ? Center(
-                  child: Text(
-                    'Tidak ada file atau direktori ditemukan',
-                    style: TextStyle(color: Colors.white, fontSize: 16),
+        body: Row(
+          children: [
+            // Panel Kiri: Non-root
+            Expanded(
+              child: GestureDetector(
+                onTap: () {
+                  setState(() {
+                    _activePanel = 'nonRoot';
+                  });
+                },
+                child: Container(
+                  color: _activePanel == 'nonRoot'
+                      ? Colors.grey[850]
+                      : Colors.grey[900],
+                  child: Column(
+                    children: [
+                      Container(
+                        padding: EdgeInsets.all(8),
+                        child: Text(
+                          'Non-root Directory',
+                          style: TextStyle(color: Colors.white, fontSize: 11),
+                        ),
+                      ),
+                      Expanded(
+                        child: _nonRootFiles.isEmpty
+                            ? Center(
+                                child: Text(
+                                  'Tidak ada file atau direktori ditemukan',
+                                  style: TextStyle(color: Colors.white),
+                                ),
+                              )
+                            : ListView.builder(
+                                itemCount: _nonRootFiles.length,
+                                itemBuilder: (context, index) {
+                                  return GestureDetector(
+                                    onTap: () {
+                                      setState(() {
+                                        _activePanel = 'nonRoot';
+                                      });
+                                      if (_nonRootFiles[index] is Directory) {
+                                        _updateNonRootFiles(
+                                            _nonRootFiles[index] as Directory);
+                                      }
+                                    },
+                                    child: buildFileTile(
+                                      _nonRootFiles[index],
+                                      (dir) => _updateNonRootFiles(dir),
+                                    ),
+                                  );
+                                },
+                              ),
+                      ),
+                    ],
                   ),
-                )
-              : ListView.builder(
-                  itemCount: _files.length,
-                  itemBuilder: (context, index) {
-                    return _buildFileTile(_files[index]);
-                  },
                 ),
+              ),
+            ),
+
+            VerticalDivider(color: Colors.grey[700], width: 1),
+
+            // Panel Kanan: Root
+            Expanded(
+              child: GestureDetector(
+                onTap: () {
+                  setState(() {
+                    _activePanel = 'root';
+                  });
+                },
+                child: Container(
+                  color: _activePanel == 'root'
+                      ? Colors.grey[850]
+                      : Colors.grey[900],
+                  child: Column(
+                    children: [
+                      Container(
+                        padding: EdgeInsets.all(8),
+                        child: Text(
+                          _hasRootAccess
+                              ? 'Root Directory'
+                              : 'Root Access Denied',
+                          style: TextStyle(color: Colors.white, fontSize: 11),
+                        ),
+                      ),
+                      Expanded(
+                        child: !_hasRootAccess
+                            ? Center(
+                                child: Text(
+                                  'Akses root ditolak',
+                                  style: TextStyle(color: Colors.white),
+                                ),
+                              )
+                            : (_rootFiles.isEmpty
+                                ? Center(
+                                    child: Text(
+                                      'Tidak ada file atau direktori ditemukan',
+                                      style: TextStyle(color: Colors.white),
+                                    ),
+                                  )
+                                : ListView.builder(
+                                    itemCount: _rootFiles.length,
+                                    itemBuilder: (context, index) {
+                                      return GestureDetector(
+                                        onTap: () {
+                                          setState(() {
+                                            _activePanel = 'root';
+                                          });
+                                          if (_rootFiles[index] is Directory) {
+                                            _updateRootFiles(
+                                                _rootFiles[index] as Directory);
+                                          }
+                                        },
+                                        child: buildFileTile(
+                                          _rootFiles[index],
+                                          (dir) => _updateRootFiles(dir),
+                                        ),
+                                      );
+                                    },
+                                  )),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
